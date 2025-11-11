@@ -2,6 +2,8 @@
 
 This guide will walk you through deploying your application to production using **Vercel** (frontend) and **Railway** (backend + database).
 
+> **⚠️ IMPORTANT**: If you're getting a 404 error from Vercel, see the [VERCEL_SETUP.md](./VERCEL_SETUP.md) guide for the correct monorepo configuration!
+
 ## Architecture Overview
 
 ```
@@ -119,16 +121,18 @@ npx prisma db push
 
 ### Step 3: Configure Project Settings
 
+> **📌 DETAILED GUIDE**: See [VERCEL_SETUP.md](./VERCEL_SETUP.md) for complete step-by-step instructions with troubleshooting.
+
 Vercel will auto-detect Next.js. Update these settings:
 
 **Framework Preset**: Next.js
 
 **Root Directory**: Click **Edit** and set to `apps/web`
 
-**Build Settings**:
-- Build Command: `pnpm install && pnpm build`
+**Build Settings** - Click "Override":
+- Build Command: `npm install && npm run build`
 - Output Directory: `.next` (default)
-- Install Command: `pnpm install`
+- Install Command: `npm install`
 
 ### Step 4: Add Environment Variables
 
