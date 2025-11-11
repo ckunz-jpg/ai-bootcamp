@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { UserRole } from '@prisma/client';
+import { supabaseAdmin } from '../lib/supabase';
+import { UserRole } from '../types/supabase';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -8,28 +8,52 @@ export interface AuthRequest extends Request {
     email: string;
     role: UserRole;
   };
+  accessToken?: string;
 }
 
-export const authenticate = (
+export const authenticate = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
 ) => {
   try {
-    const token = req.headers.authorization?.split(' ')[1];
+    const authHeader = req.headers.authorization;
 
-    if (!token) {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'No token provided' });
     }
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET || 'default-secret'
-    ) as { id: string; email: string; role: UserRole };
+    const token = authHeader.split(' ')[1];
 
-    req.user = decoded;
+    // Verify the JWT token with Supabase
+    const { data: { user: authUser }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+    if (authError || !authUser) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    // Get user profile from database
+    const { data: userProfile, error: profileError } = await supabaseAdmin
+      .from('users')
+      .select('id, email, role')
+      .eq('id', authUser.id)
+      .single();
+
+    if (profileError || !userProfile) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    // Attach user to request
+    req.user = {
+      id: userProfile.id,
+      email: userProfile.email,
+      role: userProfile.role as UserRole,
+    };
+    req.accessToken = token;
+
     next();
   } catch (error) {
+    console.error('Authentication error:', error);
     return res.status(401).json({ error: 'Invalid token' });
   }
 };

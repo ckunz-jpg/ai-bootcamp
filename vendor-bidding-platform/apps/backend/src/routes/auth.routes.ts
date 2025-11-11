@@ -1,11 +1,9 @@
 import { Router } from 'express';
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
 import { body, validationResult } from 'express-validator';
+import { supabaseAdmin } from '../lib/supabase';
+import { authenticate, AuthRequest } from '../middleware/auth';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // Register
 router.post(
@@ -26,46 +24,59 @@ router.post(
 
       const { email, password, firstName, lastName, role, phone, company } = req.body;
 
-      // Check if user exists
-      const existingUser = await prisma.user.findUnique({ where: { email } });
-      if (existingUser) {
-        return res.status(400).json({ error: 'Email already registered' });
-      }
-
-      // Hash password
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      // Create user
-      const user = await prisma.user.create({
-        data: {
-          email,
-          password: hashedPassword,
-          firstName,
-          lastName,
-          role,
-          phone,
-          company,
-        },
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          role: true,
-          phone: true,
-          company: true,
-          createdAt: true,
+      // Create user with Supabase Auth
+      const { data, error } = await supabaseAdmin.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            first_name: firstName,
+            last_name: lastName,
+            role,
+            phone: phone || null,
+            company: company || null,
+          },
         },
       });
 
-      // Generate token
-      const token = jwt.sign(
-        { id: user.id, email: user.email, role: user.role },
-        process.env.JWT_SECRET || 'default-secret',
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-      );
+      if (error) {
+        console.error('Registration error:', error);
+        if (error.message.includes('already registered')) {
+          return res.status(400).json({ error: 'Email already registered' });
+        }
+        return res.status(400).json({ error: error.message });
+      }
 
-      res.status(201).json({ user, token });
+      if (!data.user || !data.session) {
+        return res.status(500).json({ error: 'Failed to create user' });
+      }
+
+      // Get the created user profile
+      const { data: userProfile, error: profileError } = await supabaseAdmin
+        .from('users')
+        .select('id, email, first_name, last_name, role, phone, company, created_at')
+        .eq('id', data.user.id)
+        .single();
+
+      if (profileError || !userProfile) {
+        console.error('Profile fetch error:', profileError);
+        return res.status(500).json({ error: 'User created but profile not found' });
+      }
+
+      // Return user and access token
+      res.status(201).json({
+        user: {
+          id: userProfile.id,
+          email: userProfile.email,
+          firstName: userProfile.first_name,
+          lastName: userProfile.last_name,
+          role: userProfile.role,
+          phone: userProfile.phone,
+          company: userProfile.company,
+          createdAt: userProfile.created_at,
+        },
+        token: data.session.access_token,
+      });
     } catch (error) {
       console.error('Registration error:', error);
       res.status(500).json({ error: 'Failed to register user' });
@@ -89,28 +100,42 @@ router.post(
 
       const { email, password } = req.body;
 
-      // Find user
-      const user = await prisma.user.findUnique({ where: { email } });
-      if (!user) {
+      // Sign in with Supabase Auth
+      const { data, error } = await supabaseAdmin.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error || !data.user || !data.session) {
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
-      // Verify password
-      const isValidPassword = await bcrypt.compare(password, user.password);
-      if (!isValidPassword) {
-        return res.status(401).json({ error: 'Invalid credentials' });
+      // Get user profile
+      const { data: userProfile, error: profileError } = await supabaseAdmin
+        .from('users')
+        .select('id, email, first_name, last_name, role, phone, company, verified, created_at')
+        .eq('id', data.user.id)
+        .single();
+
+      if (profileError || !userProfile) {
+        console.error('Profile fetch error:', profileError);
+        return res.status(500).json({ error: 'User profile not found' });
       }
 
-      // Generate token
-      const token = jwt.sign(
-        { id: user.id, email: user.email, role: user.role },
-        process.env.JWT_SECRET || 'default-secret',
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-      );
-
-      const { password: _, ...userWithoutPassword } = user;
-
-      res.json({ user: userWithoutPassword, token });
+      res.json({
+        user: {
+          id: userProfile.id,
+          email: userProfile.email,
+          firstName: userProfile.first_name,
+          lastName: userProfile.last_name,
+          role: userProfile.role,
+          phone: userProfile.phone,
+          company: userProfile.company,
+          verified: userProfile.verified,
+          createdAt: userProfile.created_at,
+        },
+        token: data.session.access_token,
+      });
     } catch (error) {
       console.error('Login error:', error);
       res.status(500).json({ error: 'Failed to login' });
@@ -119,40 +144,37 @@ router.post(
 );
 
 // Get current user
-router.get('/me', async (req, res) => {
+router.get('/me', authenticate, async (req: AuthRequest, res) => {
   try {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({ error: 'No token provided' });
+    if (!req.user) {
+      return res.status(401).json({ error: 'User not authenticated' });
     }
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET || 'default-secret'
-    ) as { id: string };
+    // Get full user profile
+    const { data: userProfile, error } = await supabaseAdmin
+      .from('users')
+      .select('id, email, first_name, last_name, role, phone, company, verified, created_at')
+      .eq('id', req.user.id)
+      .single();
 
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.id },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        role: true,
-        phone: true,
-        company: true,
-        verified: true,
-        createdAt: true,
-      },
-    });
-
-    if (!user) {
+    if (error || !userProfile) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.json(user);
+    res.json({
+      id: userProfile.id,
+      email: userProfile.email,
+      firstName: userProfile.first_name,
+      lastName: userProfile.last_name,
+      role: userProfile.role,
+      phone: userProfile.phone,
+      company: userProfile.company,
+      verified: userProfile.verified,
+      createdAt: userProfile.created_at,
+    });
   } catch (error) {
-    res.status(401).json({ error: 'Invalid token' });
+    console.error('Get user error:', error);
+    res.status(500).json({ error: 'Failed to get user' });
   }
 });
 
