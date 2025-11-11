@@ -1,0 +1,189 @@
+// Prisma schema for Vendor Bidding Platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  PROPERTY_MANAGER
+  VENDOR
+  ADMIN
+}
+
+enum ProjectType {
+  CONSTRUCTION
+  MAINTENANCE
+  EVENT
+  LANDSCAPING
+  CLEANING
+  OTHER
+}
+
+enum ProjectStatus {
+  DRAFT
+  OPEN
+  IN_REVIEW
+  AWARDED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum BidStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  password      String
+  firstName     String
+  lastName      String
+  phone         String?
+  role          UserRole
+  company       String?
+  verified      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  properties    Property[]
+  projects      Project[]
+  bids          Bid[]
+  sentMessages  Message[] @relation("SentMessages")
+  receivedMessages Message[] @relation("ReceivedMessages")
+  notifications Notification[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model Property {
+  id          String   @id @default(uuid())
+  name        String
+  address     String
+  city        String
+  state       String
+  zipCode     String
+  managerId   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  manager     User     @relation(fields: [managerId], references: [id], onDelete: Cascade)
+  projects    Project[]
+
+  @@index([managerId])
+}
+
+model Project {
+  id          String        @id @default(uuid())
+  title       String
+  description String
+  type        ProjectType
+  status      ProjectStatus @default(DRAFT)
+  budget      Float?
+  startDate   DateTime?
+  endDate     DateTime?
+  propertyId  String
+  managerId   String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  deadline    DateTime?     // Deadline for bid submissions
+
+  // Relations
+  property    Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  manager     User     @relation(fields: [managerId], references: [id], onDelete: Cascade)
+  bids        Bid[]
+  documents   Document[]
+  messages    Message[]
+
+  @@index([managerId])
+  @@index([propertyId])
+  @@index([status])
+}
+
+model Bid {
+  id          String    @id @default(uuid())
+  projectId   String
+  vendorId    String
+  amount      Float
+  description String
+  status      BidStatus @default(PENDING)
+  timeline    String?   // Estimated timeline
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relations
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  vendor      User     @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  documents   Document[]
+
+  @@index([projectId])
+  @@index([vendorId])
+  @@index([status])
+}
+
+model Document {
+  id          String   @id @default(uuid())
+  fileName    String
+  fileUrl     String
+  fileSize    Int
+  mimeType    String
+  projectId   String?
+  bidId       String?
+  uploadedBy  String
+  createdAt   DateTime @default(now())
+
+  // Relations
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  bid         Bid?     @relation(fields: [bidId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([bidId])
+}
+
+model Message {
+  id          String   @id @default(uuid())
+  content     String
+  senderId    String
+  receiverId  String
+  projectId   String?
+  read        Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  // Relations
+  sender      User     @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver    User     @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)
+  project     Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([projectId])
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  userId      String
+  title       String
+  message     String
+  type        String   // 'bid_received', 'bid_accepted', 'message', etc.
+  read        Boolean  @default(false)
+  link        String?
+  createdAt   DateTime @default(now())
+
+  // Relations
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([read])
+}
