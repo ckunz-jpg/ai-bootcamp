@@ -18,16 +18,39 @@ dotenv.config();
 
 const app = express();
 const httpServer = createServer(app);
+const allowedOriginsForSocketIO = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'];
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
+    origin: allowedOriginsForSocketIO,
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 
 // Middleware
+const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'];
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+
+    // Check if origin is in allowed list or matches pattern
+    const isAllowed = allowedOrigins.some(allowed => {
+      if (allowed === '*') return true;
+      if (allowed.includes('*')) {
+        const pattern = new RegExp(allowed.replace(/\*/g, '.*'));
+        return pattern.test(origin);
+      }
+      return allowed === origin;
+    });
+
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

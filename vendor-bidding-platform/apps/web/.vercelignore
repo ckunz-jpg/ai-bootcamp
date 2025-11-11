@@ -1,0 +1,13 @@
+# Ignore backend and other non-web directories
+../backend
+../../packages
+
+# Ignore development files
+*.log
+.env.local
+.env.development
+
+# Ignore build artifacts
+node_modules
+.next
+out
