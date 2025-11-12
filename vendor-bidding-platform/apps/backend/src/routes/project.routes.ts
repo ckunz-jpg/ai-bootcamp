@@ -1,66 +1,35 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { supabaseAdmin } from '../lib/supabase';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { body, validationResult } from 'express-validator';
-import { notifyUsers } from '../socket';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // Get all projects (filtered by role)
 router.get('/', authenticate, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
     const role = req.user!.role;
-    const { status, type } = req.query;
 
-    let where: any = {};
+    let query = supabaseAdmin
+      .from('projects')
+      .select('*, property:properties(*), bids(count)');
 
     // Property managers see only their projects
     if (role === 'PROPERTY_MANAGER') {
-      where.managerId = userId;
+      query = query.eq('manager_id', userId);
     }
     // Vendors see all open projects
     else if (role === 'VENDOR') {
-      where.status = 'OPEN';
+      query = query.eq('status', 'OPEN');
     }
 
-    if (status) {
-      where.status = status;
-    }
-    if (type) {
-      where.type = type;
-    }
+    const { data: projects, error } = await query.order('created_at', { ascending: false });
 
-    const projects = await prisma.project.findMany({
-      where,
-      include: {
-        property: true,
-        manager: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            company: true,
-            email: true,
-          },
-        },
-        bids: {
-          select: {
-            id: true,
-            amount: true,
-            status: true,
-            vendorId: true,
-          },
-        },
-        _count: {
-          select: {
-            bids: true,
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    if (error) {
+      console.error('Error fetching projects:', error);
+      return res.status(500).json({ error: 'Failed to fetch projects' });
+    }
 
     res.json(projects);
   } catch (error) {
@@ -76,44 +45,18 @@ router.get('/:id', authenticate, async (req: AuthRequest, res) => {
     const userId = req.user!.id;
     const role = req.user!.role;
 
-    const project = await prisma.project.findUnique({
-      where: { id },
-      include: {
-        property: true,
-        manager: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            company: true,
-            email: true,
-            phone: true,
-          },
-        },
-        bids: {
-          include: {
-            vendor: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                company: true,
-                email: true,
-              },
-            },
-            documents: true,
-          },
-        },
-        documents: true,
-      },
-    });
+    const { data: project, error } = await supabaseAdmin
+      .from('projects')
+      .select('*, property:properties(*), bids(*, vendor:users(*)), documents(*)')
+      .eq('id', id)
+      .single();
 
-    if (!project) {
+    if (error || !project) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
     // Check permissions
-    if (role === 'PROPERTY_MANAGER' && project.managerId !== userId) {
+    if (role === 'PROPERTY_MANAGER' && project.manager_id !== userId) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -143,41 +86,39 @@ router.post(
       }
 
       const userId = req.user!.id;
-      const { title, description, type, budget, startDate, endDate, propertyId, deadline } = req.body;
+      const { title, description, type, budget, timeline, propertyId, deadline } = req.body;
 
       // Verify property belongs to manager
-      const property = await prisma.property.findFirst({
-        where: { id: propertyId, managerId: userId },
-      });
+      const { data: property } = await supabaseAdmin
+        .from('properties')
+        .select('id')
+        .eq('id', propertyId)
+        .eq('manager_id', userId)
+        .single();
 
       if (!property) {
         return res.status(403).json({ error: 'Property not found or access denied' });
       }
 
-      const project = await prisma.project.create({
-        data: {
+      const { data: project, error } = await supabaseAdmin
+        .from('projects')
+        .insert({
           title,
           description,
           type,
           budget: budget ? parseFloat(budget) : null,
-          startDate: startDate ? new Date(startDate) : null,
-          endDate: endDate ? new Date(endDate) : null,
-          deadline: deadline ? new Date(deadline) : null,
-          propertyId,
-          managerId: userId,
-        },
-        include: {
-          property: true,
-          manager: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              company: true,
-            },
-          },
-        },
-      });
+          timeline: timeline || null,
+          deadline: deadline ? new Date(deadline).toISOString() : null,
+          property_id: propertyId,
+          manager_id: userId,
+        })
+        .select('*, property:properties(*)')
+        .single();
+
+      if (error || !project) {
+        console.error('Error creating project:', error);
+        return res.status(500).json({ error: 'Failed to create project' });
+      }
 
       res.status(201).json(project);
     } catch (error) {
@@ -198,40 +139,39 @@ router.put(
       const userId = req.user!.id;
 
       // Verify ownership
-      const existingProject = await prisma.project.findFirst({
-        where: { id, managerId: userId },
-      });
+      const { data: existingProject } = await supabaseAdmin
+        .from('projects')
+        .select('id')
+        .eq('id', id)
+        .eq('manager_id', userId)
+        .single();
 
       if (!existingProject) {
         return res.status(404).json({ error: 'Project not found or access denied' });
       }
 
-      const { title, description, type, budget, startDate, endDate, status, deadline } = req.body;
+      const { title, description, type, budget, timeline, status, deadline } = req.body;
 
-      const project = await prisma.project.update({
-        where: { id },
-        data: {
-          ...(title && { title }),
-          ...(description && { description }),
-          ...(type && { type }),
-          ...(budget !== undefined && { budget: parseFloat(budget) }),
-          ...(startDate && { startDate: new Date(startDate) }),
-          ...(endDate && { endDate: new Date(endDate) }),
-          ...(deadline && { deadline: new Date(deadline) }),
-          ...(status && { status }),
-        },
-        include: {
-          property: true,
-          manager: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              company: true,
-            },
-          },
-        },
-      });
+      const updateData: any = {};
+      if (title) updateData.title = title;
+      if (description) updateData.description = description;
+      if (type) updateData.type = type;
+      if (budget !== undefined) updateData.budget = parseFloat(budget);
+      if (timeline) updateData.timeline = timeline;
+      if (deadline) updateData.deadline = new Date(deadline).toISOString();
+      if (status) updateData.status = status;
+
+      const { data: project, error } = await supabaseAdmin
+        .from('projects')
+        .update(updateData)
+        .eq('id', id)
+        .select('*, property:properties(*)')
+        .single();
+
+      if (error || !project) {
+        console.error('Error updating project:', error);
+        return res.status(500).json({ error: 'Failed to update project' });
+      }
 
       res.json(project);
     } catch (error) {
@@ -252,15 +192,26 @@ router.delete(
       const userId = req.user!.id;
 
       // Verify ownership
-      const project = await prisma.project.findFirst({
-        where: { id, managerId: userId },
-      });
+      const { data: project } = await supabaseAdmin
+        .from('projects')
+        .select('id')
+        .eq('id', id)
+        .eq('manager_id', userId)
+        .single();
 
       if (!project) {
         return res.status(404).json({ error: 'Project not found or access denied' });
       }
 
-      await prisma.project.delete({ where: { id } });
+      const { error } = await supabaseAdmin
+        .from('projects')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error deleting project:', error);
+        return res.status(500).json({ error: 'Failed to delete project' });
+      }
 
       res.json({ message: 'Project deleted successfully' });
     } catch (error) {
