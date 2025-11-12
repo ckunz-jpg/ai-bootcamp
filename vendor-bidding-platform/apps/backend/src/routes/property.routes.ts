@@ -1,27 +1,25 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { supabaseAdmin } from '../lib/supabase';
 import { authenticate, authorize, AuthRequest } from '../middleware/auth';
 import { body, validationResult } from 'express-validator';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // Get all properties for the authenticated property manager
 router.get('/', authenticate, authorize('PROPERTY_MANAGER'), async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.id;
 
-    const properties = await prisma.property.findMany({
-      where: { managerId: userId },
-      include: {
-        _count: {
-          select: {
-            projects: true,
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const { data: properties, error } = await supabaseAdmin
+      .from('properties')
+      .select('*, projects(count)')
+      .eq('manager_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching properties:', error);
+      return res.status(500).json({ error: 'Failed to fetch properties' });
+    }
 
     res.json(properties);
   } catch (error) {
@@ -36,16 +34,14 @@ router.get('/:id', authenticate, authorize('PROPERTY_MANAGER'), async (req: Auth
     const { id } = req.params;
     const userId = req.user!.id;
 
-    const property = await prisma.property.findFirst({
-      where: { id, managerId: userId },
-      include: {
-        projects: {
-          orderBy: { createdAt: 'desc' },
-        },
-      },
-    });
+    const { data: property, error } = await supabaseAdmin
+      .from('properties')
+      .select('*, projects(*)')
+      .eq('id', id)
+      .eq('manager_id', userId)
+      .single();
 
-    if (!property) {
+    if (error || !property) {
       return res.status(404).json({ error: 'Property not found' });
     }
 
@@ -78,16 +74,23 @@ router.post(
       const userId = req.user!.id;
       const { name, address, city, state, zipCode } = req.body;
 
-      const property = await prisma.property.create({
-        data: {
+      const { data: property, error } = await supabaseAdmin
+        .from('properties')
+        .insert({
           name,
           address,
           city,
           state,
-          zipCode,
-          managerId: userId,
-        },
-      });
+          zip_code: zipCode,
+          manager_id: userId,
+        })
+        .select()
+        .single();
+
+      if (error || !property) {
+        console.error('Error creating property:', error);
+        return res.status(500).json({ error: 'Failed to create property' });
+      }
 
       res.status(201).json(property);
     } catch (error) {
@@ -107,9 +110,12 @@ router.put(
       const { id } = req.params;
       const userId = req.user!.id;
 
-      const existingProperty = await prisma.property.findFirst({
-        where: { id, managerId: userId },
-      });
+      const { data: existingProperty } = await supabaseAdmin
+        .from('properties')
+        .select('id')
+        .eq('id', id)
+        .eq('manager_id', userId)
+        .single();
 
       if (!existingProperty) {
         return res.status(404).json({ error: 'Property not found or access denied' });
@@ -117,16 +123,24 @@ router.put(
 
       const { name, address, city, state, zipCode } = req.body;
 
-      const property = await prisma.property.update({
-        where: { id },
-        data: {
-          ...(name && { name }),
-          ...(address && { address }),
-          ...(city && { city }),
-          ...(state && { state }),
-          ...(zipCode && { zipCode }),
-        },
-      });
+      const updateData: any = {};
+      if (name) updateData.name = name;
+      if (address) updateData.address = address;
+      if (city) updateData.city = city;
+      if (state) updateData.state = state;
+      if (zipCode) updateData.zip_code = zipCode;
+
+      const { data: property, error } = await supabaseAdmin
+        .from('properties')
+        .update(updateData)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error || !property) {
+        console.error('Error updating property:', error);
+        return res.status(500).json({ error: 'Failed to update property' });
+      }
 
       res.json(property);
     } catch (error) {
@@ -146,15 +160,26 @@ router.delete(
       const { id } = req.params;
       const userId = req.user!.id;
 
-      const property = await prisma.property.findFirst({
-        where: { id, managerId: userId },
-      });
+      const { data: property } = await supabaseAdmin
+        .from('properties')
+        .select('id')
+        .eq('id', id)
+        .eq('manager_id', userId)
+        .single();
 
       if (!property) {
         return res.status(404).json({ error: 'Property not found or access denied' });
       }
 
-      await prisma.property.delete({ where: { id } });
+      const { error } = await supabaseAdmin
+        .from('properties')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        console.error('Error deleting property:', error);
+        return res.status(500).json({ error: 'Failed to delete property' });
+      }
 
       res.json({ message: 'Property deleted successfully' });
     } catch (error) {
