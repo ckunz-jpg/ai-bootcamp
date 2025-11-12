@@ -1,0 +1,5 @@
+{
+  "buildCommand": "cd vendor-bidding-platform/apps/web && npm install && npm run build",
+  "outputDirectory": "vendor-bidding-platform/apps/web/.next",
+  "installCommand": "npm install --prefix vendor-bidding-platform/apps/web"
+}
