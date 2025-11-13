@@ -1,5 +1,7 @@
 {
-  "github": {
-    "silent": true
-  }
+  "buildCommand": "cd vendor-bidding-platform/apps/web && npm run build",
+  "devCommand": "cd vendor-bidding-platform/apps/web && npm run dev",
+  "installCommand": "cd vendor-bidding-platform/apps/web && npm install",
+  "framework": null,
+  "outputDirectory": "vendor-bidding-platform/apps/web/.next"
 }
