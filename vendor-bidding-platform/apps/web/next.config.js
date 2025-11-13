@@ -7,10 +7,6 @@ const nextConfig = {
   // Optimize for production
   swcMinify: true,
   compress: true,
-  // Enable experimental features if needed
-  experimental: {
-    optimizeCss: true,
-  },
   // Production-specific settings
   ...(process.env.NODE_ENV === 'production' && {
     typescript: {
